@@ -110,7 +110,7 @@ if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
 fi
 
 # If the script exits allow all the cores.
-trap 'rm "/tmp/intel-park.lock"; rdmir "/sys/fs/cgroup/parked-cores"' EXIT
+trap 'rm "/tmp/intel-park.lock"; rmdir "/sys/fs/cgroup/parked-cores"' EXIT
 
 # Before the main loop we should know the current power state the device is in and apply for that.
 if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
