@@ -52,6 +52,14 @@ if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
     rm "/tmp/intel-park.lock"
     exit 1
 fi
+if ! printf '1' > /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_hint_enable; then
+    printf 'Workload hinting could not be enabled.\n'
+    exit 1
+fi
+if ! printf '100' > /sys/bus/pci/devices/0000:00:04.0/workload_hint/notification_delay_ms; then
+    printf 'Workload hinting notifications could not be changed.\n'
+fi
+
 
 # If the script exits allow all the cores.
 trap 'rmdir "/sys/fs/cgroup/parked-cores"' EXIT
@@ -91,13 +99,25 @@ inotifywait -m -q -e modify /sys/bus/pci/devices/0000:00:04.0/workload_hint/work
             ;;
         3)
             if ! printf 'member' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                exit 1
+                return 1
+            fi
+            if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus.exclusive; then
+                return 1
+            fi
+            if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                return 1
             fi
             printf 'sustained-ld-test.\n'
             ;;
         *)
             if ! printf 'member' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                exit 1
+                return 1
+            fi
+            if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus.exclusive; then
+                return 1
+            fi
+            if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                return 1
             fi
             printf 'performance-ld-test.\n'
             ;;
