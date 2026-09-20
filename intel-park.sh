@@ -55,7 +55,7 @@ apply_park_fun() {
 
 # --- ENTRY POINT ---
 if [ -e "/tmp/intel-park.lock" ]; then
-    printf "Another instance of intel-park.sh is already running.\n"
+    printf 'Another instance of intel-park.sh is already running.\n'
     exit 1
 fi
 touch "/tmp/intel-park.lock"
