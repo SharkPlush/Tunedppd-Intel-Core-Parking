@@ -41,10 +41,10 @@ apply_park_fun() {
                 if ! printf 'member' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
                     return 1
                 fi
-                if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus.exclusive; then
                     return 1
                 fi
-                if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus.exclusive; then
+                if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
                     return 1
                 fi
             fi
@@ -110,7 +110,7 @@ if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
 fi
 
 # If the script exits allow all the cores.
-trap 'rm "/tmp/intel-park.lock"; POWER_STATE="performance"; apply_park_fun' EXIT
+trap 'rm "/tmp/intel-park.lock"; rdmir "/sys/fs/cgroup/parked-cores"' EXIT
 
 # Before the main loop we should know the current power state the device is in and apply for that.
 if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
