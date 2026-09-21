@@ -5,8 +5,70 @@
 # Licensed under PolyForm Noncommercial License 1.0.0
 # Full license: https://github.com/SharkPlush/Tunedppd-Intel-Core-Parking/blob/main/LICENSE
 # Report any issues to github.com/SharkPlush/Tunedppd-Intel-Core-Parking/issues
+
+# I left comments for anyone who is curious how this works.
+# If you want to control how the balanced power mode works read the comments.
+
 set -euo pipefail
 
+apply_park_fun() {
+    if [ "$DYNAMIC_P_CORES" = "0" ]; then
+        case $POWER_STATE in
+            power-saver)
+                if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                    return 1
+                fi
+                if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
+                    return 1
+                fi
+                ;;
+            *)
+                # If BALANCED_P_CORES is 0 then P cores will not be used in balanced mode ->
+                # If it is 1 then P cores will be used in balanced mode.
+                if [ "$POWER_STATE" = "balanced" ] && [ "$BALANCED_P_CORES" = "0" ]; then
+                    if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                        return 1
+                    fi
+                    if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
+                        return 1
+                    fi
+                else
+                    if ! printf 'member' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
+                        return 1
+                    fi
+                    if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                        return 1
+                    fi
+                fi
+                ;;
+        esac
+    fi
+    if [ "$DYNAMIC_P_CORES" = "1" ]; then
+        case $HINT-$PARKED in
+            0-0|1-0)
+                if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                    return 1
+                fi
+                if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
+                    return 1
+                fi
+                PARKED="1"
+                ;;
+            2-1|3-1)
+                if ! printf 'member' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
+                    return 1
+                fi
+                if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                    return 1
+                fi
+                PARKED="0"
+                ;;
+        esac
+    fi
+    return 0
+}
+
+# --- ENTRY POINT ---
 if [ -e "/tmp/intel-park.lock" ]; then
     printf 'Another instance of intel-park.sh is already running.\n'
     exit 1
@@ -29,14 +91,52 @@ esac
 
 # We don't ever park E and LPE cores so we don't need to find them individually.
 # Parking E cores causes power inefficency and parking LPE cores is just not a good idea.
-LPE_CORES="16-17"
-readonly LPE_CORES
-P_CORES="0-8"
+P_CORES="$(< /sys/devices/cpu_core/cpus)"
 readonly P_CORES
-E_CORES="8-15"
-readonly E_CORES
+A_CORES="$(< /sys/devices/system/cpu/present)"
+readonly A_CORES
 
 HINT=""
+PARKED="0"
+
+: "${DYNAMIC_P_CORES:=1}"
+readonly DYNAMIC_P_CORES
+case $DYNAMIC_P_CORES in
+    1)
+        if ! command -v inotifywait &>/dev/null; then
+            printf 'inotiftywait is needed to use dynamic P cores.\n'
+            rm "/tmp/intel-park.lock"
+            exit 2
+        fi
+        printf 'P core will be parked dynamically.\n'
+        ;;
+    0)
+        if ! command -v busctl &>/dev/null; then
+            printf 'busctl is needed to use static core parking.\n'
+            rm "/tmp/intel-park.lock"
+            exit 2
+        fi
+        # Variable for controlling if the balanced power profile should have P cores utilized.
+        : "${BALANCED_P_CORES:=0}"
+        readonly BALANCED_P_CORES
+        case $BALANCED_P_CORES in
+            0|1)
+                ;;
+            *)
+                printf 'The BALANCED_P_CORES variable can only be 0 or 1.\n'
+                rm "/tmp/intel-park.lock"
+                exit 2
+                ;;
+        esac
+        BUSCTL_OUT=""
+        POWER_STATE=""
+        ;;
+    *)
+        printf "The DYNAMIC_P_CORES variable can only be 0 or 1.\n"
+        rm "/tmp/intel-park.lock"
+        exit 2
+        ;;
+esac
 
 # Allows us to actually enable core parking.
 if ! printf '+cpuset\n' > /sys/fs/cgroup/cgroup.subtree_control; then
@@ -49,40 +149,44 @@ if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
     rm "/tmp/intel-park.lock"
     exit 1
 fi
-if ! printf '1' > /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_hint_enable; then
-    prinf "Failed to enable workload hints.\n"
-    exit 1
-fi
-if ! printf '100' > /sys/bus/pci/devices/0000:00:04.0/workload_hint/notification_delay_ms; then
-    prinf "Failed to adjust workload hint delay.\n"
-fi
 
 # If the script exits allow all the cores.
 trap 'rm "/tmp/intel-park.lock"; rmdir "/sys/fs/cgroup/parked-cores"' EXIT
 
+if [ "$DYNAMIC_P_CORES" = "0" ]; then
+    if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
+        printf "Failed to capture power profile state.\n"
+        exit 1
+    fi
+    if ! apply_park_fun; then
+        printf "Failed to adjust parked CPU cores.\n"
+        exit 1
+    fi
 
-inotifywait -m -q -e modify /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_type_index | while read -r _; do
+    while read -r _; do
+        if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
+            printf "Failed to capture power profile state.\n"
+            exit 1
+        fi
+        if ! apply_park_fun; then
+            printf "Failed to adjust parked CPU cores.\n"
+            exit 1
+        fi
+    done < <(busctl --system monitor --match "type='signal',interface='org.freedesktop.DBus.Properties',path='/org/freedesktop/UPower/PowerProfiles'" | grep -oE "ActiveProfile")
+fi
+
+if [ "$DYNAMIC_P_CORES" = "1" ]; then
     HINT="$(< /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_type_index)"
-    case $HINT in
-        0)
-            # If idle park everything but LPE
-            if ! printf '0-7' > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
-                exit 1
-            fi
-            if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                exit 1
-            fi
-            printf 'IDLE PARK.\n'
-            ;;
-        *)
-            # If sustained park P
-            if ! printf '0-17' > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
-                exit 1
-            fi
-            if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                exit 1
-            fi
-            printf 'SUSTAINED/BATTERY PARK.\n'
-            ;;
-    esac
-done
+    if ! apply_park_fun; then
+        printf "Failed to adjust parked CPU cores.\n"
+        exit 1
+    fi
+
+    while read -r _; do
+        HINT="$(< /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_type_index)"
+        if ! apply_park_fun; then
+            printf "Failed to adjust parked CPU cores.\n"
+            exit 1
+        fi
+    done < <(inotifywait -m -q -e modify /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_type_index)
+fi
