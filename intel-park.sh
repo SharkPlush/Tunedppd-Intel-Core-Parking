@@ -89,7 +89,7 @@ BUSCTL_OUT=""
 POWER_STATE=""
 
 # Allows us to actually enable core parking.
-if ! printf '+cpuset\n' > /sys/fs/cgroup/cgroup.subtree_control; then
+if ! printf '+cpuset' > /sys/fs/cgroup/cgroup.subtree_control; then
     printf "Failed to add +cpuset to cgroup.subtree_control\n Is your kernel 6.7 or newer?\n"
     rm "/tmp/intel-park.lock"
     exit 1
@@ -101,7 +101,7 @@ if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
 fi
 
 # If the script exits allow all the cores.
-trap 'rm "/tmp/intel-park.lock"; rmdir "/sys/fs/cgroup/parked-cores"' EXIT
+trap -- 'rmdir "/sys/fs/cgroup/parked-cores"; printf '-cpuset' > /sys/fs/cgroup/cgroup.subtree_control; rm "/tmp/intel-park.lock"' EXIT
 
 # Before the main loop we should know the current power state the device is in and apply for that.
 if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
