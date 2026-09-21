@@ -5,13 +5,8 @@
 # Licensed under PolyForm Noncommercial License 1.0.0
 # Full license: https://github.com/SharkPlush/Tunedppd-Intel-Core-Parking/blob/main/LICENSE
 # Report any issues to github.com/SharkPlush/Tunedppd-Intel-Core-Parking/issues
-
-# I left comments for anyone who is curious how this works.
-# If you want to control how the balanced power mode works read the comments.
-
 set -euo pipefail
 
-# --- ENTRY POINT ---
 if [ -e "/tmp/intel-park.lock" ]; then
     printf 'Another instance of intel-park.sh is already running.\n'
     exit 1
@@ -32,19 +27,6 @@ case $CPU_GEN in
         ;;
 esac
 
-# Variable for controlling if the balanced power profile should have P cores utilized.
-: "${BALANCED_P_CORES:=0}"
-readonly BALANCED_P_CORES
-case $BALANCED_P_CORES in
-    0|1)
-        ;;
-    *)
-        printf 'The BALANCED_P_CORES variable can only be 0 or 1.\n'
-        rm "/tmp/intel-park.lock"
-        exit 2
-        ;;
-esac
-
 # We don't ever park E and LPE cores so we don't need to find them individually.
 # Parking E cores causes power inefficency and parking LPE cores is just not a good idea.
 LPE_CORES="16-17"
@@ -54,8 +36,7 @@ readonly P_CORES
 E_CORES="8-15"
 readonly E_CORES
 
-BUSCTL_OUT=""
-POWER_STATE=""
+HINT=""
 
 # Allows us to actually enable core parking.
 if ! printf '+cpuset\n' > /sys/fs/cgroup/cgroup.subtree_control; then
@@ -68,6 +49,13 @@ if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
     rm "/tmp/intel-park.lock"
     exit 1
 fi
+if ! printf '1' > /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_hint_enable; then
+    prinf "Failed to enable workload hints.\n"
+    exit 1
+fi
+if ! printf '100' > /sys/bus/pci/devices/0000:00:04.0/workload_hint/notification_delay_ms; then
+    prinf "Failed to adjust workload hint delay.\n"
+fi
 
 # If the script exits allow all the cores.
 trap 'rm "/tmp/intel-park.lock"; rmdir "/sys/fs/cgroup/parked-cores"' EXIT
@@ -77,68 +65,24 @@ inotifywait -m -q -e modify /sys/bus/pci/devices/0000:00:04.0/workload_hint/work
     HINT="$(< /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_type_index)"
     case $HINT in
         0)
-            if ! printf '0-15' > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
-                return 1
+            # If idle park everything but LPE
+            if ! printf '0-7' > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                exit 1
             fi
             if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                return 1
+                exit 1
             fi
             printf 'IDLE PARK.\n'
             ;;
-        1|2)
-            if ! printf '0-7' > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
-                return 1
+        *)
+            # If sustained park P
+            if ! printf '0-17' > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
+                exit 1
             fi
             if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                return 1
+                exit 1
             fi
-            printf 'BATTERY PARK.\n'
-            ;;
-        *)
-            if ! printf '0-17' > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
-                return 1
-            fi
-            if ! printf 'member' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                return 1
-            fi
-            printf 'SUSTAINED/BURSTY PARK.\n'
+            printf 'SUSTAINED/BATTERY PARK.\n'
             ;;
     esac
-done
-
-
-
-
-
-
-
-
-# Before the main loop we should know the current power state the device is in and apply for that.
-if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
-    printf 'Failed to capture power profile state when starting script.\n'
-    exit 1
-fi
-if ! apply_park_fun; then
-     printf 'Failed to adjust parked CPU cores.\n'
-     exit 1
-fi
-
-while true; do
-    # busctl listens for a power state changed.
-    # Becauuse this is a listener and not polling extra battery won't be wasted.
-    if ! BUSCTL_OUT="$(busctl --system wait org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.DBus.Properties PropertiesChanged)"; then
-        printf "Failed to start busctl listener.\n"
-        exit 1
-    fi
-    grep -q "ActiveProfile" <<<"$BUSCTL_OUT" || continue
-
-    if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
-        printf "Failed to capture power profile state.\n"
-        exit 1
-    fi
-
-    if ! apply_park_fun; then
-         printf "Failed to adjust parked CPU cores.\n"
-         exit 1
-    fi
 done
