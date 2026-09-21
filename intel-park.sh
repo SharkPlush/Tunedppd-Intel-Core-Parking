@@ -169,7 +169,7 @@ if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
 fi
 
 # If the script exits revert to stock system state.
-trap 'rmdir "/sys/fs/cgroup/parked-cores"; printf '-cpuset' > /sys/fs/cgroup/cgroup.subtree_control; rm "/tmp/intel-park.lock"' EXIT
+trap -- 'rmdir "/sys/fs/cgroup/parked-cores"; printf '-cpuset' > /sys/fs/cgroup/cgroup.subtree_control; rm "/tmp/intel-park.lock"' EXIT
 
 if [ "$DYNAMIC_P_CORES" = "0" ]; then
     # Before the main loop we should know the current power state the device is in and apply for that.
@@ -218,5 +218,5 @@ if [ "$DYNAMIC_P_CORES" = "1" ]; then
             printf "Failed to adjust parked CPU cores.\n"
             exit 1
         fi
-    done < <(inotifywait -m -q -e modify /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_type_index) || printf 'Failed to start inotifywait.\n'; exit 1
+    done < <(inotifywait -m -q -e modify /sys/bus/pci/devices/0000:00:04.0/workload_hint/workload_type_index) || { printf 'Failed to start inotifywait.\n'; exit 1; }
 fi
