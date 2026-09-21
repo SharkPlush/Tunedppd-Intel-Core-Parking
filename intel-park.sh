@@ -17,9 +17,6 @@ apply_park_fun() {
             if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
                 return 1
             fi
-            if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus.exclusive; then
-                return 1
-            fi
             if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
                 return 1
             fi
@@ -31,17 +28,11 @@ apply_park_fun() {
                 if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
                     return 1
                 fi
-                if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus.exclusive; then
-                    return 1
-                fi
                 if ! printf 'isolated' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
                     return 1
                 fi
             else
                 if ! printf 'member' > /sys/fs/cgroup/parked-cores/cpuset.cpus.partition; then
-                    return 1
-                fi
-                if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus.exclusive; then
                     return 1
                 fi
                 if ! printf '%s' "$A_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
