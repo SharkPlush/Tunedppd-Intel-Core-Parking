@@ -37,7 +37,7 @@ apply_park_fun() {
         *)
             # If BALANCED_P_CORES is 0 then P cores will not be used in balanced mode ->
             # If it is 1 then P cores will be used in balanced mode.
-            if [ "$POWER_STATE" = "balanced" ] && [ "$BALANCED_P_CORES" = "0" ]; then
+            if [[ "$POWER_STATE" = "balanced" && "$BALANCED_P_CORES" = "0" ]]; then
                 if ! printf '%s' "$P_CORES" > /sys/fs/cgroup/parked-cores/cpuset.cpus; then
                     return 1
                 fi
@@ -63,7 +63,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-if ! mkdir -p /var/lock/intel-park; then
+if ! mkdir "/var/lock/intel-park" 2>/dev/null; then
     printf 'Another instance of intel-park.sh is already running.\n'
     exit 1
 fi
@@ -74,11 +74,8 @@ if ! grep -q '^vendor_id\s*: GenuineIntel' /proc/cpuinfo; then
     rmdir "/var/lock/intel-park"
     exit 1
 fi
-CPU_GEN="$(awk -F': ' '/^model/ {print $2; exit}' /proc/cpuinfo)"
-readonly CPU_GEN
-case $CPU_GEN in
+case "$(grep -m1 '^model' /proc/cpuinfo | cut -d' ' -f2)" in
     151|154|183|186|191|170|172)
-        printf 'Supported CPU found.\n'
         ;;
     *)
         printf 'Your CPU is not supported.\n'
@@ -126,33 +123,48 @@ fi
 trap -- 'cleanup_fun' EXIT
 
 # Before the main loop we should know the current power state the device is in and apply for that.
-if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
-    printf 'Failed to capture power profile state when starting script.\n'
-    exit 1
-fi
+case $(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile) in
+    *power-saver*)
+        POWER_STATE="power-saver"
+        ;;
+    *balanced*)
+        POWER_STATE="balanced"
+        ;;
+    *performance*)
+        POWER_STATE="performance"
+        ;;
+    *)
+        printf 'Failed to capture power profile state when starting script.\n'
+        exit 1
+        ;;
+esac
 if ! apply_park_fun; then
      printf 'Failed to adjust parked CPU cores.\n'
      exit 1
 fi
 
-while true; do
-    # busctl listens for a power state changed.
-    # Because this is a listener and not polling extra battery won't be wasted.
-    if ! BUSCTL_OUT="$(busctl --system wait org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.DBus.Properties PropertiesChanged)"; then
-        printf 'Failed to start busctl listener.\n'
-        exit 1
-    fi
-    if ! grep -q "ActiveProfile" <<<"$BUSCTL_OUT"; then
-        continue
-    fi
-
-    if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
-        printf 'Failed to capture power profile state.\n'
-        exit 1
-    fi
+# busctl listens for a power state changed.
+# Because this is a listener and not polling extra battery won't be wasted.
+while read -r BUSCTL_OUT; do
+    case $BUSCTL_OUT in
+        *power-saver*)
+            POWER_STATE="power-saver"
+            ;;
+        *balanced*)
+            POWER_STATE="balanced"
+            ;;
+        *performance*)
+            POWER_STATE="performance"
+            ;;
+        *)
+            continue
+            ;;
+    esac
 
     if ! apply_park_fun; then
-         printf 'Failed to adjust parked CPU cores.\n'
-         exit 1
+        printf 'Failed to adjust parked CPU cores.\n'
+        exit 1
     fi
-done
+done < <(busctl --system monitor --match "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/freedesktop/UPower/PowerProfiles'" 2>/dev/null)
+printf 'Failed to start busctl monitor.\n'
+exit 1
