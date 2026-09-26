@@ -112,7 +112,7 @@ if ! printf '+cpuset' > /sys/fs/cgroup/cgroup.subtree_control; then
     rmdir "/var/lock/intel-park"
     exit 1
 fi
-if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
+if ! mkdir -p "/sys/fs/cgroup/parked-cores"; then
     printf 'Failed to create /sys/fs/cgroup/parked-cores\n' >&2
     rmdir "/var/lock/intel-park"
     exit 1
