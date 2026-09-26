@@ -11,6 +11,15 @@
 
 set -euo pipefail
 
+cleanup_fun() {
+    if ! rmdir "/sys/fs/cgroup/parked-cores"; then
+        printf 'Failed to remove /sys/fs/cgroup/parked-cores\n'
+    fi
+    if ! rmdir "/var/lock/intel-park"; then
+        printf 'Failed to remove lock\n'
+    fi
+}
+
 apply_park_fun() {
     case $POWER_STATE in
         power-saver)
@@ -45,14 +54,23 @@ apply_park_fun() {
 }
 
 # --- ENTRY POINT ---
-if [ -e "/tmp/intel-park.lock" ]; then
+if [ "$EUID" -ne 0 ]; then
+    printf 'This script must be run as root.\n'
+    exit 1
+fi
+
+if ! mkdir -p /var/lock/intel-park; then
     printf 'Another instance of intel-park.sh is already running.\n'
     exit 1
 fi
-touch "/tmp/intel-park.lock"
 
 # Check for supported CPU
-CPU_GEN="$(awk '/^model\t/{print $3;exit}' /proc/cpuinfo)"
+if ! grep -q '^vendor_id\s*: GenuineIntel' /proc/cpuinfo; then
+    printf 'Your CPU is not an Intel CPU.\n'
+    rmdir "/var/lock/intel-park"
+    exit 1
+fi
+CPU_GEN="$(awk -F': ' '/^model/ {print $2; exit}' /proc/cpuinfo)"
 readonly CPU_GEN
 case $CPU_GEN in
     151|154|183|186|191|170|172)
@@ -60,7 +78,7 @@ case $CPU_GEN in
         ;;
     *)
         printf 'Your CPU is not supported.\n'
-        rm "/tmp/intel-park.lock"
+        rmdir "/var/lock/intel-park"
         exit 2
         ;;
 esac
@@ -73,7 +91,7 @@ case $BALANCED_P_CORES in
         ;;
     *)
         printf 'The BALANCED_P_CORES variable can only be 0 or 1.\n'
-        rm "/tmp/intel-park.lock"
+        rmdir "/var/lock/intel-park"
         exit 2
         ;;
 esac
@@ -90,18 +108,18 @@ POWER_STATE=""
 
 # Allows us to actually enable core parking.
 if ! printf '+cpuset' > /sys/fs/cgroup/cgroup.subtree_control; then
-    printf "Failed to add +cpuset to cgroup.subtree_control\n Is your kernel 6.7 or newer?\n"
-    rm "/tmp/intel-park.lock"
+    printf 'Failed to add +cpuset to cgroup.subtree_control\n Is your kernel 6.7 or newer?\n'
+    rmdir "/var/lock/intel-park"
     exit 1
 fi
 if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
-    printf "Failed to create '/sys/fs/cgroup/parked-cores'\n"
-    rm "/tmp/intel-park.lock"
+    printf 'Failed to create /sys/fs/cgroup/parked-cores\n'
+    rmdir "/var/lock/intel-park"
     exit 1
 fi
 
 # If the script exits allow all the cores.
-trap -- 'rmdir "/sys/fs/cgroup/parked-cores"; printf '-cpuset' > /sys/fs/cgroup/cgroup.subtree_control; rm "/tmp/intel-park.lock"' EXIT
+trap -- 'cleanup_fun' EXIT
 
 # Before the main loop we should know the current power state the device is in and apply for that.
 if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
@@ -113,15 +131,24 @@ if ! apply_park_fun; then
      exit 1
 fi
 
-while read -r _; do
+while true; do
     # busctl listens for a power state changed.
     # Because this is a listener and not polling extra battery won't be wasted.
+    if ! BUSCTL_OUT="$(busctl --system wait org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.DBus.Properties PropertiesChanged)"; then
+        printf "Failed to start busctl listener.\n"
+        exit 1
+    fi
+    if ! grep -q "ActiveProfile" <<<"$BUSCTL_OUT"; then
+        continue
+    fi
+
     if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
         printf "Failed to capture power profile state.\n"
         exit 1
     fi
+
     if ! apply_park_fun; then
          printf "Failed to adjust parked CPU cores.\n"
          exit 1
     fi
-done< <(busctl --system monitor --match "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/freedesktop/UPower/PowerProfiles'")
+done
