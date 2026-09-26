@@ -116,8 +116,12 @@ fi
 while read -r _; do
     # busctl listens for a power state changed.
     # Because this is a listener and not polling extra battery won't be wasted.
+    if ! POWER_STATE="$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | grep -m1 -oE "power-saver|balanced|performance")"; then
+        printf "Failed to capture power profile state.\n"
+        exit 1
+    fi
     if ! apply_park_fun; then
          printf "Failed to adjust parked CPU cores.\n"
          exit 1
     fi
-done< <(busctl --system monitor --match "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/freedesktop/UPower/PowerProfiles'" | grep -oE "power-saver|balanced|performance")
+done< <(busctl --system monitor --match "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/freedesktop/UPower/PowerProfiles'")
