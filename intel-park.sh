@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Created by SharkPlush on GitHub
 # https://github.com/SharkPlush
 # Copyright 2026 SharkPlush
 # Licensed under PolyForm Noncommercial License 1.0.0
 # Full license: https://github.com/SharkPlush/Tunedppd-Intel-Core-Parking/blob/main/LICENSE
-# Report any issues to github.com/SharkPlush/Tunedppd-Intel-Core-Parking/issues
+# Report any issues to https://github.com/SharkPlush/Tunedppd-Intel-Core-Parking/issues
 
 # I left comments for anyone who is curious how this works.
 # If you want to control how the balanced power mode works read the comments.
