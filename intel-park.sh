@@ -109,8 +109,8 @@ if ! A_CORES="$(< /sys/devices/system/cpu/present)"; then
 fi
 readonly A_CORES
 
-BUSCTL_OUT=""
-POWER_STATE=""
+BUSCTL_OUT=''
+POWER_STATE=''
 
 # Allows us to actually enable core parking.
 if ! printf '+cpuset' > '/sys/fs/cgroup/cgroup.subtree_control'; then
