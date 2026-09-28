@@ -169,6 +169,6 @@ while read -r BUSCTL_OUT; do
         printf 'Failed to adjust parked CPU cores.\n' >&2
         exit 4
     fi
-done < <(busctl --system monitor --match "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/freedesktop/UPower/PowerProfiles'" 2>/dev/null)
+done < <(busctl --system monitor --json=short --match "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/freedesktop/UPower/PowerProfiles'" 2>/dev/null)
 printf 'Failed to start busctl monitor.\n' >&2
 exit 1
