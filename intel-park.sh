@@ -10,7 +10,6 @@
 # If you want to control how the balanced power mode works read the comments.
 
 # TODO:
-# Add debugging.
 # Add --help
 
 set -euo pipefail
