@@ -9,17 +9,14 @@
 # I left comments for anyone who is curious how this works.
 # If you want to control how the balanced power mode works read the comments.
 
-# TODO:
-# Add --help
-
 set -euo pipefail
 
 cleanup_fun() {
+    if ! printf '%s' "${A_CORES:-}" > '/sys/fs/cgroup/parked-cores/cpuset.cpus'; then
+        printf 'Failed to add all cores to cpuset.cpus\n' >&2
+    fi
     if ! printf 'member' > '/sys/fs/cgroup/parked-cores/cpuset.cpus.partition'; then
         printf 'Failed to write member to cpuset.cpus.partition\n' >&2
-    fi
-    if ! printf '%s' "$A_CORES" > '/sys/fs/cgroup/parked-cores/cpuset.cpus'; then
-        printf 'Failed to add all cores to cpuset.cpus\n' >&2
     fi
     if ! rmdir '/sys/fs/cgroup/parked-cores'; then
         printf 'Failed to remove /sys/fs/cgroup/parked-cores\n' >&2
@@ -73,15 +70,49 @@ if ! mkdir '/var/lock/intel-park' 2>/dev/null; then
     exit 1
 fi
 
+trap -- cleanup_fun EXIT
+
+# --- SCRIPT STARTUP CHECKS ---
+# Make sure end user doesn't set some variables themselves.
+if [ -n "${P_CORES+x}" ]; then
+    printf 'Setting the P_CORES variable yourself is not allowed.\n' >&2
+    exit 2
+fi
+P_CORES=''
+if [ -n "${A_CORES+x}" ]; then
+    printf 'Setting the A_CORES variable yourself is not allowed.\n' >&2
+    exit 2
+fi
+A_CORES=''
+if [ -n "${BUSCTL_OUT+x}" ]; then
+    printf 'Setting the BUSCTL_OUT variable yourself is not allowed.\n' >&2
+    exit 2
+fi
+BUSCTL_OUT=''
+if [ -n "${POWER_STATE+x}" ]; then
+    printf 'Setting the POWER_STATE variable yourself is not allowed.\n' >&2
+    exit 2
+fi
+POWER_STATE=''
+
 # Check for supported CPU
 case "$(< /proc/cpuinfo)" in
     *GenuineIntel*model*:*170*|*GenuineIntel*model*:*151*|*GenuineIntel*model*:*154*|*GenuineIntel*model*:*183*|*GenuineIntel*model*:*186*|*GenuineIntel*model*:*191*|*GenuineIntel*model*:*172*)
         ;;
     *)
         printf 'Your CPU is not supported.\n' >&2
-        rmdir '/var/lock/intel-park'
         exit 4
 esac
+
+# Check if intel-lpmd is active.
+if [ -d '/sys/fs/cgroup/parked-cores' ]; then
+    printf '/sys/fs/cgroup/parked-cores already exists?\n' >&2
+    exit 1
+fi
+if [ -d '/sys/fs/cgroup/lpm' ]; then
+    printf 'Disable intel-lpmd and reboot your device to use this program.\n' >&2
+    exit 1
+fi
 
 # Variable for controlling if the balanced power profile should have P cores utilized.
 : "${BALANCED_P_CORES:=0}"
@@ -91,7 +122,6 @@ case "$BALANCED_P_CORES" in
         ;;
     *)
         printf 'The BALANCED_P_CORES variable can only be 0 or 1.\n' >&2
-        rmdir '/var/lock/intel-park'
         exit 2
         ;;
 esac
@@ -99,34 +129,29 @@ esac
 # We don't ever park E and LPE cores so we don't need to find them individually.
 # Parking E cores causes power inefficency and parking LPE cores is just not a good idea.
 if ! P_CORES="$(< /sys/devices/cpu_core/cpus)"; then
-    printf 'Could not find system P cores.\n'
+    printf 'Could not find system P cores.\n' >&2
     exit 4
 fi
 readonly P_CORES
 if ! A_CORES="$(< /sys/devices/system/cpu/present)"; then
-    printf 'Could not find system all cores.\n'
+    printf 'Could not find system all cores.\n' >&2
     exit 4
 fi
 readonly A_CORES
 
-BUSCTL_OUT=''
-POWER_STATE=''
-
 # Allows us to actually enable core parking.
 if ! printf '+cpuset' > '/sys/fs/cgroup/cgroup.subtree_control'; then
     printf 'Failed to add +cpuset to cgroup.subtree_control\n Is your kernel 6.7 or newer?\n' >&2
-    rmdir '/var/lock/intel-park'
     exit 4
 fi
+
+# Create directory where core parking will be managed.
 if ! mkdir -p '/sys/fs/cgroup/parked-cores'; then
     printf 'Failed to create /sys/fs/cgroup/parked-cores\n' >&2
-    rmdir '/var/lock/intel-park'
     exit 4
 fi
 
-# If the script exits allow all the cores.
-trap -- cleanup_fun EXIT
-
+# --- SCRIPT TRUE START ---
 # Before the main loop we should know the current power state the device is in and apply for that.
 case "$(busctl --system get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile)" in
     *power-saver*)
